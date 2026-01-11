@@ -1,5 +1,6 @@
 import streamlit as st
 import plotly.express as px
+import pandas as pd
 
 from utils.data import (
     get_default_export_folder,
@@ -13,11 +14,32 @@ st.title("Active vs Non-Active")
 
 folder = st.sidebar.text_input("Gold export folder", value=get_default_export_folder())
 
-df = load_csv_folder(folder, "agg_incrementality_active_value.csv")
+# IMPORTANT: required=False so the page does not crash on missing file
+df = load_csv_folder(folder, "agg_incrementality_active_value.csv", required=False)
+
+if df.empty:
+    st.error(
+        "Missing data file: agg_incrementality_active_value.csv\n\n"
+        "To fix:\n"
+        "- Export Gold CSVs into 'data/gold_exports/' (recommended for Streamlit Cloud), or\n"
+        "- Set the sidebar 'Gold export folder' to the folder that contains the CSV."
+    )
+    st.stop()
+
+# Ensure numeric types safely
+for col in ["incremental_revenue", "incremental_transactions", "avg_delta_aov", "customers", "is_active"]:
+    if col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
 df = ensure_month_fields(df, "month_id")
 df = sort_month(df)
 
-df["is_active"] = df["is_active"].astype(int)
+# Ensure is_active is int-like
+if "is_active" in df.columns:
+    df["is_active"] = df["is_active"].astype(int)
+else:
+    st.error("Column 'is_active' not found in agg_incrementality_active_value.csv")
+    st.stop()
 
 # Aggregate across value dimension to focus on Active vs Non-Active
 by_month_active = df.groupby(["month_id_norm", "month_label", "is_active"], as_index=False).agg(
@@ -30,7 +52,12 @@ by_month_active["active_group"] = by_month_active["is_active"].map({0: "Non-Acti
 
 months = [m for m in by_month_active["month_id_norm"].unique().tolist() if m != "Unknown"]
 months = sorted(months)
-sel_month = st.selectbox("Select month", months, index=(len(months)-1) if len(months) else 0)
+
+if not months:
+    st.error("No valid months found in data. Check 'month_id' values in the CSV.")
+    st.stop()
+
+sel_month = st.selectbox("Select month", months, index=len(months) - 1)
 
 m = by_month_active[by_month_active["month_id_norm"] == sel_month].copy()
 
@@ -96,3 +123,10 @@ st.download_button(
     data=df.to_csv(index=False),
     file_name="agg_incrementality_active_value.csv"
 )
+
+with st.expander("Debug / Data audit", expanded=False):
+    st.write("Folder input:", folder)
+    st.write("Default export folder:", get_default_export_folder())
+    st.write("Rows in df:", len(df))
+    st.write("Rows in by_month_active:", len(by_month_active))
+    st.dataframe(by_month_active.head(10))
